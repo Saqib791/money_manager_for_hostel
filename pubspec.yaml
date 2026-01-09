@@ -1,0 +1,45 @@
+name: hisab_pro_app
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.5+1
+  shared_preferences: ^2.5.4
+  intl: ^0.20.2
+  google_fonts: ^7.0.0
+  file_picker: ^10.3.8
+  flutter_colorpicker: ^1.1.0
+  permission_handler: ^12.0.1
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # Dependency yahan rahegi
+  flutter_launcher_icons: "^0.13.1"
+
+# --- YAHAN CHANGE KIYA HAI ---
+# Ye setting alag se (bina space ke shuru honi chahiye)
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/icon.png"
+  min_sdk_android: 21 
+  adaptive_icon_background: "#ffffff" # Optional: Background color for adaptive icons
+  adaptive_icon_foreground: "assets/icon.png" # Optional: Agar adaptive icon chahiye
+
+flutter:
+  uses-material-design: true
+  
+  # Assets folder yahan define karna zaroori hai
+  assets:
+    - assets/

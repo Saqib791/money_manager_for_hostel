@@ -40,10 +40,3 @@ Selection ho na ho, doston aur tiffin wale ka hisab clear hona chahiye!
 - **Storage:** SharedPreferences + Local JSON files.
 - **PDF Generation:** `pdf` and `path_provider` packages.
 
-## 🚀 How to Run this in your Laptop
-
-Agar tumhara test syllabus complete ho gaya hai aur tum isko run karna chahte ho, toh ye lo steps:
-
-1. Clone this repo:
-   ```bash
-   git clone [https://github.com/YourUsername/money_manager_for_hostel.git](https://github.com/YourUsername/money_manager_for_hostel.git)

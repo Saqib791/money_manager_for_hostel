@@ -9,6 +9,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -252,10 +254,26 @@ class AppProvider with ChangeNotifier {
 
   List<String> contacts = [];
   List<Transaction> transactions = [];
+  List<String> quickNotes = ["🍔 Food", "🍟 Fries", "🥤 Cold Drink", "☕ Tea", "🚌 Travel", "🛒 Grocery", "🎬 Movie"];
+
+  void addQuickNote(String note) {
+    if (!quickNotes.contains(note)) {
+      quickNotes.add(note);
+      saveData();
+    }
+  }
+
+  void removeQuickNote(String note) {
+    quickNotes.remove(note);
+    saveData();
+  }
   
   String tiffinName = "";
   DateTime? tiffinStartDate;
-  Map<String, String> tiffinExceptions = {}; 
+  int tiffinDietsPerDay = 2;
+  int tiffinTotalDays = 30;
+  double tiffinPricePerDiet = 0.0;
+  Map<String, String> tiffinExceptions = {};
   List<Map<String, dynamic>> tiffinHistory = [];
 
   AppProvider();
@@ -286,6 +304,7 @@ class AppProvider with ChangeNotifier {
 
     totalBalance = prefs.getDouble('totalBalance') ?? 0.0;
     contacts = prefs.getStringList('contacts') ?? [];
+    quickNotes = prefs.getStringList('quickNotes') ?? ["🍔 Food", "🍟 Fries", "🥤 Cold Drink", "☕ Tea/Coffee", "🚌 Travel", "🛒 Grocery", "🎬 Movie", "⛽ Petrol"];
     
     final txnString = prefs.getString('transactions');
     if (txnString != null) {
@@ -296,12 +315,17 @@ class AppProvider with ChangeNotifier {
     tiffinName = prefs.getString('tiffinName') ?? "";
     final startStr = prefs.getString('tiffinStartDate');
     if (startStr != null) tiffinStartDate = DateTime.parse(startStr);
+    tiffinDietsPerDay = prefs.getInt('tiffinDietsPerDay') ?? 2;
+    tiffinTotalDays = prefs.getInt('tiffinTotalDays') ?? 30;
+    tiffinPricePerDiet = prefs.getDouble('tiffinPricePerDiet') ?? 0.0;
     
     final exStr = prefs.getString('tiffinExceptions');
     if (exStr != null) tiffinExceptions = Map<String, String>.from(jsonDecode(exStr));
-
+    
     final histStr = prefs.getString('tiffinHistory');
-    if (histStr != null) tiffinHistory = List<Map<String, dynamic>>.from(jsonDecode(histStr));
+    if (histStr != null) {
+      tiffinHistory = List<Map<String, dynamic>>.from(jsonDecode(histStr));
+    }
 
     if (lastBackupPath != "Not selected") await _loadFromFile();
 
@@ -315,15 +339,16 @@ class AppProvider with ChangeNotifier {
     prefs.setString('lastBackupPath', lastBackupPath);
     prefs.setDouble('totalBalance', totalBalance);
     prefs.setStringList('contacts', contacts);
+    prefs.setStringList('quickNotes', quickNotes);
     
-    if(transactions.length < 50) {
-       prefs.setString('transactions', jsonEncode(transactions.map((e) => e.toJson()).toList()));
-    }
+    prefs.setString('transactions', jsonEncode(transactions.map((e) => e.toJson()).toList()));
     
     prefs.setString('tiffinName', tiffinName);
     if(tiffinStartDate != null) prefs.setString('tiffinStartDate', tiffinStartDate!.toIso8601String());
     else prefs.remove('tiffinStartDate');
-    
+    prefs.setInt('tiffinDietsPerDay', tiffinDietsPerDay);
+    prefs.setInt('tiffinTotalDays', tiffinTotalDays);
+    prefs.setDouble('tiffinPricePerDiet', tiffinPricePerDiet);
     prefs.setString('tiffinExceptions', jsonEncode(tiffinExceptions));
     prefs.setString('tiffinHistory', jsonEncode(tiffinHistory));
     
@@ -337,10 +362,14 @@ class AppProvider with ChangeNotifier {
       final data = {
         'balance': totalBalance,
         'contacts': contacts,
+        'quickNotes': quickNotes,
         'transactions': transactions.map((e) => e.toJson()).toList(),
         'tiffin': {
           'name': tiffinName,
           'start': tiffinStartDate?.toIso8601String(),
+          'dietsPerDay': tiffinDietsPerDay,
+          'totalDays': tiffinTotalDays,
+          'pricePerDiet': tiffinPricePerDiet,
           'ex': tiffinExceptions,
           'hist': tiffinHistory
         }
@@ -364,6 +393,7 @@ class AppProvider with ChangeNotifier {
           
           if (data.containsKey('balance')) totalBalance = (data['balance'] as num).toDouble();
           if (data.containsKey('contacts')) contacts = List<String>.from(data['contacts']);
+          if (data.containsKey('quickNotes')) quickNotes = List<String>.from(data['quickNotes']);
           if (data.containsKey('transactions')) {
             transactions = (data['transactions'] as List).map((e) => Transaction.fromJson(e)).toList();
           }
@@ -371,8 +401,11 @@ class AppProvider with ChangeNotifier {
             var t = data['tiffin'];
             tiffinName = t['name'] ?? "";
             tiffinStartDate = t['start'] != null ? DateTime.parse(t['start']) : null;
-            tiffinExceptions = Map<String, String>.from(t['ex']);
-            tiffinHistory = List<Map<String, dynamic>>.from(t['hist']);
+            tiffinDietsPerDay = t['dietsPerDay'] ?? 2;
+            tiffinTotalDays = t['totalDays'] ?? 30;
+            tiffinPricePerDiet = (t['pricePerDiet'] as num?)?.toDouble() ?? 0.0;
+            if (t['ex'] != null) tiffinExceptions = Map<String, String>.from(t['ex']);
+            if (t['hist'] != null) tiffinHistory = List<Map<String, dynamic>>.from(t['hist']);
           }
        }
     } catch(e) {
@@ -396,6 +429,10 @@ class AppProvider with ChangeNotifier {
     transactions.insert(0, txn);
     if (txn.contact == 'Self') {
       totalBalance -= txn.amount; 
+    } else if (txn.contact == 'Wallet') {
+      if (txn.type == 'add') totalBalance += txn.amount;
+      if (txn.type == 'withdraw') totalBalance -= txn.amount;
+      if (txn.type == 'edit') totalBalance = txn.amount;
     } else {
       if (txn.type == 'give') totalBalance += txn.amount;
       if (txn.type == 'take') totalBalance -= txn.amount;
@@ -411,6 +448,9 @@ class AppProvider with ChangeNotifier {
       final txn = transactions[index];
       if (txn.contact == 'Self') {
         totalBalance += txn.amount; 
+      } else if (txn.contact == 'Wallet') {
+        if (txn.type == 'add') totalBalance -= txn.amount;
+        if (txn.type == 'withdraw') totalBalance += txn.amount;
       } else {
         if (txn.type == 'give') totalBalance -= txn.amount;
         if (txn.type == 'take') totalBalance += txn.amount;
@@ -422,16 +462,36 @@ class AppProvider with ChangeNotifier {
     }
   }
 
-  void setTiffinStart(DateTime date) { tiffinStartDate = date; saveData(); }
-  void updateTiffinName(String name) { tiffinName = name; saveData(); }
-  
-  void toggleTiffinDay(DateTime date) {
-    if (tiffinStartDate == null || date.isBefore(DateUtils.dateOnly(tiffinStartDate!))) return;
-    String dStr = DateFormat('yyyy-MM-dd').format(date);
-    String? current = tiffinExceptions[dStr];
-    if (current == null) tiffinExceptions[dStr] = 'half';
-    else if (current == 'half') tiffinExceptions[dStr] = 'off';
-    else tiffinExceptions.remove(dStr);
+  void startTiffinPlan(String name, DateTime start, int dietsPerDay, int totalDays, double pricePerDiet) {
+    tiffinName = name;
+    tiffinStartDate = start;
+    tiffinDietsPerDay = dietsPerDay;
+    tiffinTotalDays = totalDays;
+    tiffinPricePerDiet = pricePerDiet;
+    
+    double totalCost = dietsPerDay * totalDays * pricePerDiet;
+    
+    totalBalance -= totalCost;
+    
+    transactions.insert(0, Transaction(
+      id: DateTime.now().toString(),
+      contact: 'Self',
+      type: 'expense',
+      amount: totalCost,
+      note: "${dietsPerDay * totalDays} diets from $tiffinName",
+      date: DateTime.now()
+    ));
+    
+    saveData();
+  }
+
+  void resetCurrentTiffinData() {
+    tiffinName = "";
+    tiffinStartDate = null;
+    tiffinDietsPerDay = 2;
+    tiffinTotalDays = 30;
+    tiffinPricePerDiet = 0.0;
+    tiffinExceptions = {};
     saveData();
   }
 
@@ -443,6 +503,9 @@ class AppProvider with ChangeNotifier {
       'start': tiffinStartDate!.toIso8601String(),
       'end': cycle['actualEnd'],
       'ex': jsonDecode(jsonEncode(tiffinExceptions)),
+      'dietsPerDay': tiffinDietsPerDay,
+      'totalDays': tiffinTotalDays,
+      'pricePerDiet': tiffinPricePerDiet
     });
     tiffinName = "";
     tiffinStartDate = null;
@@ -457,21 +520,18 @@ class AppProvider with ChangeNotifier {
     }
   }
 
-  void resetCurrentTiffinData() {
-    tiffinName = "";
-    tiffinStartDate = null;
-    tiffinExceptions = {};
-    saveData();
-  }
-
   Future<void> factoryReset() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
     contacts = [];
     transactions = [];
+    quickNotes = ["🍔 Food", "🍟 Fries", "🥤 Cold Drink", "☕ Tea/Coffee", "🚌 Travel", "🛒 Grocery", "🎬 Movie", "⛽ Petrol"];
     totalBalance = 0.0;
     tiffinName = "";
     tiffinStartDate = null;
+    tiffinDietsPerDay = 2;
+    tiffinTotalDays = 30;
+    tiffinPricePerDiet = 0.0;
     tiffinExceptions = {};
     tiffinHistory = [];
     lastBackupPath = "Not selected";
@@ -504,10 +564,14 @@ class AppProvider with ChangeNotifier {
       final data = {
         'balance': totalBalance,
         'contacts': contacts,
+        'quickNotes': quickNotes,
         'transactions': transactions.map((e) => e.toJson()).toList(),
         'tiffin': {
           'name': tiffinName,
           'start': tiffinStartDate?.toIso8601String(),
+          'dietsPerDay': tiffinDietsPerDay,
+          'totalDays': tiffinTotalDays,
+          'pricePerDiet': tiffinPricePerDiet,
           'ex': tiffinExceptions,
           'hist': tiffinHistory
         }
@@ -521,6 +585,155 @@ class AppProvider with ChangeNotifier {
     }
   }
 
+  Future<String> exportAsPDF() async {
+    try {
+      // User se folder select karwayein
+      String? exportDir = await FilePicker.platform.getDirectoryPath();
+      if (exportDir == null) return "Cancelled";
+
+      final pdf = pw.Document();
+
+      // Helper function: Tiffin ke chhuttiyon (exceptions) ko "04-27 (half)" format me convert karne ke liye
+      String formatExceptions(Map<dynamic, dynamic>? exceptions) {
+        if (exceptions == null || exceptions.isEmpty) return '';
+        List<String> items = [];
+        exceptions.forEach((dateStr, status) {
+          // dateStr usually 'yyyy-MM-dd' hota hai
+          final parts = dateStr.toString().split('-');
+          if (parts.length == 3) {
+            items.add('${parts[1]}-${parts[2]} ($status)');
+          }
+        });
+        return items.join(', ');
+      }
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          build: (pw.Context context) {
+            return [
+              // --- HEADER SECTION ---
+              pw.Center(
+                child: pw.Text("Financial & Personal Report", 
+                  style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+              ),
+              pw.SizedBox(height: 5),
+              pw.Center(
+                child: pw.Text("Generated on: ${DateFormat('d/M/yyyy, h:mm:ss a').format(DateTime.now())}", 
+                  style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+              ),
+              pw.SizedBox(height: 30),
+
+              // --- CURRENT TIFFIN PROVIDER ---
+              pw.Text("Current Tiffin Provider", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 8),
+              if (tiffinName.isNotEmpty)
+                pw.TableHelper.fromTextArray(
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+                  cellStyle: const pw.TextStyle(fontSize: 10),
+                  headers: ['Provider Name', 'Start Date', 'Current Month Adjustments:'],
+                  data: [
+                    [
+                      tiffinName, 
+                      tiffinStartDate != null ? DateFormat('d/M/yyyy').format(tiffinStartDate!) : '', 
+                      formatExceptions(tiffinExceptions)
+                    ]
+                  ],
+                )
+              else
+                pw.Text("No active tiffin plan.", style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey600)),
+              pw.SizedBox(height: 30),
+
+              // --- CURRENT BALANCE ---
+              pw.Center(
+                child: pw.Column(
+                  children: [
+                    pw.Text("CURRENT BALANCE", style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
+                    pw.SizedBox(height: 4),
+                    pw.Text("Rs ${totalBalance.toStringAsFixed(2)}", style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                  ]
+                )
+              ),
+              pw.SizedBox(height: 30),
+
+              // --- TIFFIN HISTORY ---
+              pw.Text("Tiffin History", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 8),
+              if (tiffinHistory.isEmpty)
+                 pw.Text("No history available.", style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey600))
+              else
+                pw.TableHelper.fromTextArray(
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+                  cellStyle: const pw.TextStyle(fontSize: 10),
+                  columnWidths: {
+                    0: const pw.FlexColumnWidth(2),
+                    1: const pw.FlexColumnWidth(3),
+                    2: const pw.FlexColumnWidth(4),
+                  },
+                  headers: ['Provider', 'Period', 'Adjustments'],
+                  data: tiffinHistory.map((h) {
+                    String start = h['start'] != null ? DateFormat('d/M/yyyy').format(DateTime.parse(h['start'])) : '';
+                    String end = (h['end'] != null && h['end'].toString().isNotEmpty) ? h['end'] : 'Ongoing';
+                    return [
+                      h['name'] ?? '',
+                      '$start to $end',
+                      formatExceptions(h['ex'])
+                    ];
+                  }).toList(),
+                ),
+              pw.SizedBox(height: 30),
+
+              // --- TRANSACTION HISTORY ---
+              pw.Text("Transaction History", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 8),
+              if (transactions.isEmpty)
+                pw.Text("No transactions available.", style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey600))
+              else
+                pw.TableHelper.fromTextArray(
+                  headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                  cellStyle: const pw.TextStyle(fontSize: 9),
+                  // Padding kam ki hai taaki box ki height choti ho jaye
+                  cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 2), 
+                  
+                  // YAHAN ADD KIYA HAI COLUMN WIDTHS
+                  columnWidths: {
+                    0: const pw.FlexColumnWidth(1.7), // DATE
+                    1: const pw.FlexColumnWidth(3.5), // NOTE (Isko patla kiya)
+                    2: const pw.FlexColumnWidth(0.8), // CONTACT
+                    3: const pw.FlexColumnWidth(1.2), // TYPE (Isko chauda kiya)
+                    4: const pw.FlexColumnWidth(0.9), // AMOUNT
+                  },
+                  
+                  headers: ['DATE', 'NOTE', 'CONTACT', 'TYPE', 'AMOUNT'],
+                  data: transactions.map((t) {
+                    return [
+                      DateFormat('d/M/yyyy hh:mm a').format(t.date),
+                      t.note,
+                      t.contact,
+                      t.type.toUpperCase(),
+                      'Rs ${t.amount.toStringAsFixed(2)}'
+                    ];
+                  }).toList(),
+                ),
+            ];
+          }
+        )
+      );
+      // File ko format kiye huye naam ke sath save karna
+      String fileName = 'Financial_Report_${DateFormat('dd_MMM_yyyy').format(DateTime.now())}.pdf';
+      File file = File('$exportDir/$fileName');
+      await file.writeAsBytes(await pdf.save());
+      
+      return "PDF Saved to: $exportDir/$fileName";
+    } catch (e) {
+      return "Error generating PDF: $e";
+    }
+  }
+  
   Future<String> restoreBackup() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles();
@@ -532,6 +745,7 @@ class AppProvider with ChangeNotifier {
 
       if (data.containsKey('balance')) totalBalance = (data['balance'] as num).toDouble();
       if (data.containsKey('contacts')) contacts = List<String>.from(data['contacts']);
+      if (data.containsKey('quickNotes')) quickNotes = List<String>.from(data['quickNotes']);
       if (data.containsKey('transactions')) {
         transactions = (data['transactions'] as List).map((e) => Transaction.fromJson(e)).toList();
       }
@@ -540,8 +754,11 @@ class AppProvider with ChangeNotifier {
         var t = data['tiffin'];
         tiffinName = t['name'] ?? "";
         tiffinStartDate = t['start'] != null ? DateTime.parse(t['start']) : null;
-        tiffinExceptions = Map<String, String>.from(t['ex']);
-        tiffinHistory = List<Map<String, dynamic>>.from(t['hist']);
+        tiffinDietsPerDay = t['dietsPerDay'] ?? 2;
+        tiffinTotalDays = t['totalDays'] ?? 30;
+        tiffinPricePerDiet = (t['pricePerDiet'] as num?)?.toDouble() ?? 0.0;
+        if (t['ex'] != null) tiffinExceptions = Map<String, String>.from(t['ex']);
+        if (t['hist'] != null) tiffinHistory = List<Map<String, dynamic>>.from(t['hist']);
       }
       
       if(file.parent.existsSync()) lastBackupPath = file.parent.path;
@@ -560,6 +777,8 @@ class AppProvider with ChangeNotifier {
     for (var t in transactions) {
       if (t.contact == 'Self') {
         kharcha += t.amount;
+      } else if (t.contact == 'Wallet') {
+        // ignore for stats
       } else {
         if (!pMap.containsKey(t.contact)) pMap[t.contact] = 0;
         if (t.type == 'take' || t.type == 'old_take') pMap[t.contact] = pMap[t.contact]! + t.amount;
@@ -577,26 +796,53 @@ class AppProvider with ChangeNotifier {
     return {'kharcha': kharcha, 'lena': lena, 'dena': dena};
   }
 
+  void toggleTiffinDay(DateTime date) {
+    if (tiffinStartDate == null || date.isBefore(DateUtils.dateOnly(tiffinStartDate!))) return;
+    String dStr = DateFormat('yyyy-MM-dd').format(date);
+    String? current = tiffinExceptions[dStr];
+    if (tiffinDietsPerDay == 2) {
+      if (current == null) tiffinExceptions[dStr] = 'half';
+      else if (current == 'half') tiffinExceptions[dStr] = 'off';
+      else tiffinExceptions.remove(dStr);
+    } else {
+      if (current == null) tiffinExceptions[dStr] = 'off';
+      else tiffinExceptions.remove(dStr);
+    }
+    saveData();
+  }
+
   Map<String, dynamic> calculateCycle() {
     if (tiffinStartDate == null) return {};
 
     double quota = 0;
+    double consumedQuota = 0;
+    double targetQuota = tiffinTotalDays.toDouble();
+    
     DateTime cursor = DateUtils.dateOnly(tiffinStartDate!);
-    DateTime origEnd = cursor.add(const Duration(days: 29));
+    DateTime origEnd = cursor.add(Duration(days: tiffinTotalDays - 1));
+    DateTime today = DateUtils.dateOnly(DateTime.now());
+    
     String actualEndStr = "";
     double remainder = 0;
     int safety = 0;
 
-    while (quota < 30 && safety < 100) {
+    while (quota < targetQuota && safety < 365) {
       String dStr = DateFormat('yyyy-MM-dd').format(cursor);
       String status = tiffinExceptions[dStr] ?? 'active';
 
-      if (status == 'active') quota += 1;
-      if (status == 'half') quota += 0.5;
+      double dayQuota = 0;
+      if (status == 'active') dayQuota = 1;
+      else if (status == 'half') dayQuota = 0.5;
 
-      if (quota >= 30) {
+      quota += dayQuota;
+      
+      if (cursor.isBefore(today) || DateUtils.isSameDay(cursor, today)) {
+        consumedQuota += dayQuota;
+      }
+      
+      if (quota >= targetQuota && actualEndStr.isEmpty) {
         actualEndStr = dStr;
-        if (quota == 30.5) remainder = 0.5;
+        if (quota > targetQuota) remainder = 0.5;
       }
       cursor = cursor.add(const Duration(days: 1));
       safety++;
@@ -605,10 +851,13 @@ class AppProvider with ChangeNotifier {
     return {
       'origEnd': DateFormat('yyyy-MM-dd').format(origEnd),
       'actualEnd': actualEndStr,
-      'quota': quota,
+      'quota': quota, // The full quota (should equal targetQuota)
+      'consumedQuota': consumedQuota, // Quota up to today
       'rem': remainder
     };
   }
+
+
 }
 
 class Transaction {
@@ -703,7 +952,7 @@ class PageHeader extends StatelessWidget {
   }
 }
 
-// === TIFFIN SCREEN (COMPACT & COLOR FIX) ===
+// === TIFFIN SCREEN (SUBSCRIPTION TRACKER) ===
 class TiffinScreen extends StatefulWidget {
   const TiffinScreen({super.key});
   @override
@@ -711,29 +960,28 @@ class TiffinScreen extends StatefulWidget {
 }
 
 class _TiffinScreenState extends State<TiffinScreen> {
+  final _nameController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _daysController = TextEditingController(text: "30");
+  int _dietsPerDay = 2;
+  DateTime _startDate = DateTime.now();
   DateTime _viewMonth = DateTime.now();
   int _historyIndex = -1;
-  late TextEditingController _nameController;
 
   @override
   void initState() {
     super.initState();
     final provider = Provider.of<AppProvider>(context, listen: false);
-    _nameController = TextEditingController(text: provider.tiffinName);
-  }
-  
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final provider = Provider.of<AppProvider>(context, listen: false);
-    if(_nameController.text != provider.tiffinName) {
-      _nameController.text = provider.tiffinName;
+    if (provider.tiffinStartDate != null) {
+      _viewMonth = provider.tiffinStartDate!;
     }
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _priceController.dispose();
+    _daysController.dispose();
     super.dispose();
   }
 
@@ -749,7 +997,7 @@ class _TiffinScreenState extends State<TiffinScreen> {
           children: [
             const PageHeader(title: "Tiffin Manager"),
             
-            // DROP DOWN
+            // HISTORY DROPDOWN
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
@@ -784,54 +1032,254 @@ class _TiffinScreenState extends State<TiffinScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            
+            if (_historyIndex == -1 && provider.tiffinStartDate == null)
+              _buildSetupForm(context, provider)
+            else if (_historyIndex == -1 && provider.tiffinStartDate != null)
+              _buildProgressUI(context, provider, false)
+            else
+              _buildProgressUI(context, provider, true),
+          ],
+        ),
+      ),
+    );
+  }
 
-            if (_historyIndex == -1) 
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _nameController,
-                        decoration: const InputDecoration(labelText: "Service Name", isDense: true, prefixIcon: Icon(Icons.restaurant_menu_rounded, size: 20)),
-                        style: const TextStyle(fontSize: 14),
-                        onChanged: (v) => provider.updateTiffinName(v),
+  Widget _buildSetupForm(BuildContext context, AppProvider provider) {
+    int days = int.tryParse(_daysController.text) ?? 30;
+    double price = double.tryParse(_priceController.text) ?? 0.0;
+    double totalCost = _dietsPerDay * days * price;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Setup New Tiffin Plan", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(labelText: "Provider Name (e.g., Aunty Tiffin)", prefixIcon: Icon(Icons.restaurant_menu_rounded)),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _daysController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: "Total Days", prefixIcon: Icon(Icons.calendar_view_day_rounded)),
+                    onChanged: (v) => setState((){}),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).inputDecorationTheme.fillColor,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Theme.of(context).inputDecorationTheme.enabledBorder!.borderSide.color)
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        value: _dietsPerDay,
+                        isExpanded: true,
+                        items: const [
+                          DropdownMenuItem(value: 1, child: Text("1 Diet/Day")),
+                          DropdownMenuItem(value: 2, child: Text("2 Diets/Day")),
+                        ],
+                        onChanged: (v) => setState(() => _dietsPerDay = v!),
                       ),
-                      const SizedBox(height: 10),
-                      InkWell(
-                        onTap: () async {
-                          final d = await showDatePicker(context: context, firstDate: DateTime(2023), lastDate: DateTime(2030), initialDate: provider.tiffinStartDate ?? DateTime.now());
-                          if (d != null) {
-                            provider.setTiffinStart(d);
-                            setState(() => _viewMonth = d);
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                            borderRadius: BorderRadius.circular(10)
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.calendar_today_rounded, size: 18, color: provider.primaryColor),
-                              const SizedBox(width: 10),
-                              Text("Start: ", style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
-                              Text(
-                                provider.tiffinStartDate == null ? "Select Date" : DateFormat('dd MMM yyyy').format(provider.tiffinStartDate!),
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _priceController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: "Price per Diet (₹)", prefixIcon: Icon(Icons.currency_rupee_rounded)),
+              onChanged: (v) => setState((){}),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () async {
+                final d = await showDatePicker(context: context, firstDate: DateTime(2023), lastDate: DateTime(2030), initialDate: _startDate);
+                if (d != null) setState(() => _startDate = d);
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(10)
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_today_rounded, size: 18, color: provider.primaryColor),
+                    const SizedBox(width: 10),
+                    Text("Start Date: ", style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
+                    Text(
+                      DateFormat('dd MMM yyyy').format(_startDate),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: provider.primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: provider.primaryColor.withOpacity(0.3))
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Calculated Total:", style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text("₹${totalCost.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: provider.primaryColor)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: provider.primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                onPressed: () {
+                  if (_nameController.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter provider name")));
+                    return;
+                  }
+                  if (days <= 0 || price <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter valid days and price")));
+                    return;
+                  }
+                  provider.startTiffinPlan(_nameController.text.trim(), _startDate, _dietsPerDay, days, price);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Tiffin Started! Cost deducted from balance.")));
+                },
+                icon: const Icon(Icons.play_circle_fill_rounded),
+                label: const Text("Start Tiffin & Pay", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressUI(BuildContext context, AppProvider provider, bool isHistory) {
+    String tName = provider.tiffinName;
+    DateTime? tStart = provider.tiffinStartDate;
+    int tDiets = provider.tiffinDietsPerDay;
+    int tDays = provider.tiffinTotalDays;
+    double tPrice = provider.tiffinPricePerDiet;
+    double consumedQuota = 0;
+
+    if (isHistory && _historyIndex != -1) {
+      final h = provider.tiffinHistory[_historyIndex];
+      tName = h['name'] ?? "";
+      tStart = DateTime.parse(h['start']);
+      tDiets = h['dietsPerDay'] ?? 2;
+      tDays = h['totalDays'] ?? 30;
+      tPrice = (h['pricePerDiet'] as num?)?.toDouble() ?? 0.0;
+      consumedQuota = tDays.toDouble(); // fully consumed for history
+    } else {
+      var cycle = provider.calculateCycle();
+      consumedQuota = cycle['consumedQuota'] ?? 0.0;
+    }
+    
+    // Ensure we don't go over 100% just in case
+    if (consumedQuota > tDays) consumedQuota = tDays.toDouble();
+    
+    double progress = tDays > 0 ? consumedQuota / tDays : 0;
+    
+    double totalCost = tDiets * tDays * tPrice;
+    double consumedCost = tDiets * consumedQuota * tPrice;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(backgroundColor: provider.primaryColor.withOpacity(0.2), child: Icon(Icons.restaurant, color: provider.primaryColor)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(tName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      Text("Started: ${DateFormat('dd MMM yyyy').format(tStart!)}", style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     ],
                   ),
                 ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: provider.primaryColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                  child: Text("$tDiets Diets/Day", style: TextStyle(color: provider.primaryColor, fontWeight: FontWeight.bold, fontSize: 12)),
+                )
+              ],
+            ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Days Progress", style: TextStyle(fontWeight: FontWeight.bold)),
+                Text("${consumedQuota.toStringAsFixed(consumedQuota.truncateToDouble() == consumedQuota ? 0 : 1)} / $tDays Days", style: TextStyle(color: Colors.grey.shade600)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 12,
+                backgroundColor: Colors.grey.shade300,
+                color: provider.primaryColor,
               ),
-
-            const SizedBox(height: 12),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                    child: Column(
+                      children: [
+                        const Text("Consumed", style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text("₹${consumedCost.toStringAsFixed(0)}", style: const TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                    child: Column(
+                      children: [
+                        const Text("Total Paid", style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text("₹${totalCost.toStringAsFixed(0)}", style: const TextStyle(color: Colors.green, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -850,105 +1298,129 @@ class _TiffinScreenState extends State<TiffinScreen> {
             ),
             const SizedBox(height: 10),
 
-            _buildCalendar(provider),
+            _buildCalendar(provider, isHistory),
 
             const SizedBox(height: 12),
             const Wrap(
               spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
               children: [
-                _Tag(col: Colors.blue, txt: "Start"),
-                _Tag(col: Colors.green, txt: "Full"),
+
+                _Tag(col: Colors.green, txt: "Active"),
                 _Tag(col: Colors.orange, txt: "Half"),
                 _Tag(col: Colors.red, txt: "Off"),
                 _Tag(col: Colors.purple, txt: "End"),
               ],
             ),
 
-            const SizedBox(height: 16),
-            if (_historyIndex == -1 && provider.tiffinStartDate != null)
+            const SizedBox(height: 24),
+           if (isHistory)
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
+                  onPressed: () {
+                    showDialog(
+                      context: context, 
+                      builder: (ctx) => AlertDialog(
+                        title: const Text("Delete Record?"),
+                        content: const Text("Are you sure you want to delete this history record? This action cannot be undone."),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx), 
+                            child: const Text("Cancel")
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              provider.deleteTiffinHistoryItem(_historyIndex);
+                              setState(() => _historyIndex = -1);
+                              Navigator.pop(ctx); // Close the dialog
+                              
+                              // Optional: Show a little confirmation message
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("Record deleted successfully!"))
+                              );
+                            },
+                            child: const Text("Delete", style: TextStyle(color: Colors.red))
+                          ),
+                        ],
+                      )
+                    );
+                  },
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text("Delete This Record"),
+                ),
+              )
+            else
               Column(
                 children: [
                   SizedBox(
                     width: double.infinity,
-                    height: 42,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: provider.primaryColor,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
-                      ),
+                    height: 48,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: provider.primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       onPressed: () {
                         provider.archiveTiffinMonth();
-                        _nameController.clear();
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Saved & Reset!")));
                         setState(() => _historyIndex = -1);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Month completed and saved to history!")));
                       },
-                      icon: const Icon(Icons.save_rounded, size: 18),
-                      label: const Text("Complete Month & Reset", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      icon: const Icon(Icons.archive_rounded),
+                      label: const Text("Complete Month & Save", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     ),
                   ),
+                  const SizedBox(height: 12),
                   TextButton.icon(
                     onPressed: () {
-                       showDialog(context: context, builder: (ctx) => AlertDialog(
-                          title: const Text("Clear Current Data?"),
-                          content: const Text("This will DELETE current progress without saving."),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-                            TextButton(onPressed: () {
+                      showDialog(context: context, builder: (ctx) => AlertDialog(
+                        title: const Text("End Tiffin Plan Early?"),
+                        content: const Text("This will clear the current plan without saving to history. No money will be refunded automatically to your wallet. Are you sure?"),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                          TextButton(
+                            onPressed: () {
                               provider.resetCurrentTiffinData();
-                              _nameController.clear();
                               Navigator.pop(ctx);
-                            }, child: const Text("CLEAR ALL", style: TextStyle(color: Colors.red))),
-                          ],
-                        ));
-                    }, 
-                    icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.red),
-                    label: const Text("Reset (Delete All)", style: TextStyle(color: Colors.red, fontSize: 12)),
+                            },
+                            child: const Text("End Plan", style: TextStyle(color: Colors.red))
+                          ),
+                        ],
+                      ));
+                    },
+                    icon: const Icon(Icons.stop_circle_rounded, color: Colors.red),
+                    label: const Text("End Tiffin Plan Early", style: TextStyle(color: Colors.red)),
                   )
-                ],
-              ),
-              
-            if(_historyIndex != -1)
-               SizedBox(
-                 width: double.infinity,
-                 child: OutlinedButton.icon(
-                   style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
-                   onPressed: () {
-                      provider.deleteTiffinHistoryItem(_historyIndex);
-                      setState(() => _historyIndex = -1);
-                   }, 
-                   icon: const Icon(Icons.delete_forever, size: 18), 
-                   label: const Text("Delete This Record")
-                 ),
-               )
+                ]
+              )
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCalendar(AppProvider provider) {
+  Widget _buildCalendar(AppProvider provider, bool isHistory) {
     DateTime? start;
     Map<String, dynamic> exceptions = {};
     String actualEndStr = "";
     String origEndStr = "";
-    double rem = 0;
+    double rem = 0.0;
 
-    if (_historyIndex == -1) {
+    if (isHistory && _historyIndex != -1) {
+      final h = provider.tiffinHistory[_historyIndex];
+      start = DateTime.parse(h['start']);
+      exceptions = h['ex'] ?? {};
+      actualEndStr = h['end'] ?? "";
+      int tDays = h['totalDays'] ?? 30;
+      origEndStr = DateFormat('yyyy-MM-dd').format(DateUtils.dateOnly(start).add(Duration(days: tDays - 1)));
+    } else {
+      if (provider.tiffinStartDate == null) return const SizedBox();
       start = provider.tiffinStartDate;
       exceptions = provider.tiffinExceptions;
       var cycle = provider.calculateCycle();
       actualEndStr = cycle['actualEnd'] ?? "";
       origEndStr = cycle['origEnd'] ?? "";
       rem = cycle['rem'] ?? 0.0;
-    } else {
-      final h = provider.tiffinHistory[_historyIndex];
-      start = DateTime.parse(h['start']);
-      exceptions = h['ex'];
-      actualEndStr = h['end'];
     }
-
-    if (start == null) return const SizedBox(height: 80, child: Center(child: Text("Select Start Date above", style: TextStyle(color: Colors.grey))));
+    
+    if (start == null) return const SizedBox();
 
     final daysInMonth = DateUtils.getDaysInMonth(_viewMonth.year, _viewMonth.month);
     final firstDayOffset = DateUtils.firstDayOffset(_viewMonth.year, _viewMonth.month, MaterialLocalizations.of(context));
@@ -971,10 +1443,8 @@ class _TiffinScreenState extends State<TiffinScreen> {
 
         bool isDark = provider.isDark;
 
-        if (DateUtils.isSameDay(date, start)) {
-          bg = Colors.blueAccent; txt = Colors.white;
-        } else if (dStr == actualEndStr) {
-          if (_historyIndex == -1 && rem == 0.5) {
+        if (dStr == actualEndStr) {
+          if (rem == 0.5) {
              bg = const Color(0xFFE0B0FF); txt = Colors.black;
           } else {
              bg = Colors.purpleAccent; txt = Colors.white;
@@ -988,20 +1458,19 @@ class _TiffinScreenState extends State<TiffinScreen> {
           bg = isDark ? Colors.orangeAccent.withOpacity(0.5) : Colors.orange.shade100;
           txt = isDark ? Colors.orangeAccent.shade100 : Colors.orange.shade900;
         } 
-        // --- CUSTOM GREEN COLOR FIX (Neon Mint for Dark Mode) ---
-        else if (date.isAfter(start!) && (actualEndStr == "" || dStr.compareTo(actualEndStr) < 0)) {
-           // USER REQUESTED: #6bffb2 for Dark Mode
+        // Updated to include the start date in the active (green) section
+        else if ((date.isAfter(start!) || DateUtils.isSameDay(date, start!)) && (actualEndStr == "" || dStr.compareTo(actualEndStr) < 0)) {
            bg = isDark 
                 ? const Color(0xFF6BFFB2).withOpacity(0.5) 
                 : Colors.green.shade100;
            
-           txt = isDark ? Colors.white : Colors.green.shade900; // Text White in dark mode
+           txt = isDark ? Colors.white : Colors.green.shade900; 
         }
 
         if (dStr == origEndStr) border = Border.all(color: Colors.grey, width: 2);
 
         return GestureDetector(
-          onTap: _historyIndex == -1 ? () => provider.toggleTiffinDay(date) : null,
+          onTap: isHistory ? null : () => provider.toggleTiffinDay(date),
           child: Container(
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: border),
             alignment: Alignment.center,
@@ -1073,13 +1542,51 @@ class WalletCard extends StatelessWidget {
               ],
             ),
             Container(
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
-              child: IconButton(
-                onPressed: () => _showAddMoneyDialog(context, provider),
-                icon: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
-                tooltip: "Add Funds",
-                constraints: const BoxConstraints(minHeight: 36, minWidth: 36),
-                padding: EdgeInsets.zero,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2), 
+                shape: BoxShape.circle
+              ),
+              child: PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded, color: Colors.white, size: 20),
+                tooltip: "Manage Balance",
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                color: Theme.of(context).cardColor,
+                onSelected: (String type) {
+                  _showWalletDialog(context, provider, type);
+                },
+                itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                  const PopupMenuItem<String>(
+                    value: 'add',
+                    child: Row(
+                      children: [
+                        Icon(Icons.add_rounded, size: 20, color: Colors.green),
+                        SizedBox(width: 10),
+                        Text('Add Balance'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem<String>(
+                    value: 'withdraw',
+                    child: Row(
+                      children: [
+                        Icon(Icons.remove_rounded, size: 20, color: Colors.orange),
+                        SizedBox(width: 10),
+                        Text('Withdraw Balance'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem<String>(
+                    value: 'edit',
+                    child: Row(
+                      children: [
+                        Icon(Icons.edit_rounded, size: 20, color: Colors.blue),
+                        SizedBox(width: 10),
+                        Text('Edit Balance'),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             )
           ],
@@ -1088,12 +1595,26 @@ class WalletCard extends StatelessWidget {
     );
   }
 
-  void _showAddMoneyDialog(BuildContext context, AppProvider provider) {
+  Widget _buildActionBtn(BuildContext context, AppProvider provider, IconData icon, String tooltip, String type) {
+    return Container(
+      decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle),
+      child: IconButton(
+        onPressed: () => _showWalletDialog(context, provider, type),
+        icon: Icon(icon, color: Colors.white, size: 20),
+        tooltip: tooltip,
+        constraints: const BoxConstraints(minHeight: 32, minWidth: 32),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+
+  void _showWalletDialog(BuildContext context, AppProvider provider, String type) {
     final controller = TextEditingController();
+    String title = type == 'add' ? "Add Balance" : type == 'withdraw' ? "Withdraw Balance" : "Edit Balance";
     showDialog(
       context: context, 
       builder: (ctx) => AlertDialog(
-        title: const Text("Add Funds"),
+        title: Text(title),
         content: TextField(
           controller: controller,
           keyboardType: TextInputType.number,
@@ -1105,11 +1626,18 @@ class WalletCard extends StatelessWidget {
           FilledButton(
             onPressed: () {
               if (controller.text.isNotEmpty) {
-                provider.addMoneyToWallet(double.parse(controller.text));
+                provider.addTransaction(Transaction(
+                  id: DateTime.now().toString(),
+                  contact: 'Wallet',
+                  type: type,
+                  amount: double.parse(controller.text),
+                  note: type == 'add' ? 'Added funds' : type == 'withdraw' ? 'Withdrew funds' : 'Edited balance',
+                  date: DateTime.now(),
+                ));
                 Navigator.pop(ctx);
               }
             }, 
-            child: const Text("Add Amount")
+            child: const Text("Save")
           ),
         ],
       )
@@ -1137,12 +1665,24 @@ class HisabScreen extends StatelessWidget {
                 const PageHeader(title: "Dashboard"),
                 Positioned(
                   right: 0,
-                  child: IconButton(
-                    onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
-                    },
-                    icon: Icon(Icons.history_rounded, color: provider.primaryColor, size: 24),
-                    tooltip: "Analysis",
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        onPressed: () {
+                          showSearch(context: context, delegate: TransactionSearchDelegate(provider));
+                        },
+                        icon: Icon(Icons.search_rounded, color: provider.primaryColor, size: 24),
+                        tooltip: "Search",
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
+                        },
+                        icon: Icon(Icons.history_rounded, color: provider.primaryColor, size: 24),
+                        tooltip: "Analysis",
+                      ),
+                    ],
                   ),
                 )
               ],
@@ -1190,16 +1730,33 @@ class HisabScreen extends StatelessWidget {
             ListView.separated(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: provider.transactions.length > 15 ? 15 : provider.transactions.length,
+              itemCount: provider.transactions.length,
               separatorBuilder: (ctx, i) => const SizedBox(height: 6),
               itemBuilder: (ctx, i) {
                 final t = provider.transactions[i];
                 Color col;
                 IconData ico;
-                if(t.contact == 'Self') { col = Colors.orange; ico = Icons.fastfood_rounded; }
+                if(t.contact == 'Wallet') {
+                  col = Colors.blue; 
+                  ico = t.type == 'add' ? Icons.account_balance_wallet : t.type == 'withdraw' ? Icons.money_off : Icons.edit; 
+                }
+                else if(t.contact == 'Self') { col = Colors.orange; ico = Icons.fastfood_rounded; }
+                else if(t.type == 'paid') { col = Colors.purple; ico = Icons.done_all_rounded; }
+                else if(t.type == 'got') { col = Colors.teal; ico = Icons.done_all_rounded; }
                 else if(t.type.contains('old')) { col = Colors.grey; ico = Icons.history_rounded; }
-                else if(['take', 'paid'].contains(t.type)) { col = Colors.green; ico = Icons.arrow_upward_rounded; }
+                else if(t.type == 'take') { col = Colors.green; ico = Icons.arrow_upward_rounded; }
                 else { col = Colors.red; ico = Icons.arrow_downward_rounded; }
+
+                String typeStr = t.type;
+                if (t.type == 'give') typeStr = 'Udhar Liya';
+                else if (t.type == 'take') typeStr = 'Udhar Diya';
+                else if (t.type == 'paid') typeStr = 'I Paid';
+                else if (t.type == 'got') typeStr = 'Got Paid';
+                else if (t.contact == 'Self') typeStr = '';
+
+                String noteDisplay = t.note.isEmpty ? typeStr : typeStr.isEmpty ? t.note : "${t.note} ($typeStr)";
+                if (noteDisplay.isEmpty) noteDisplay = DateFormat('d MMM').format(t.date);
+                else noteDisplay = "$noteDisplay • ${DateFormat('d MMM').format(t.date)}";
 
                 return Card(
                   margin: EdgeInsets.zero,
@@ -1213,7 +1770,7 @@ class HisabScreen extends StatelessWidget {
                     ),
                     title: Text(t.contact, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     subtitle: Text(
-                      "${t.note.isEmpty ? t.type : t.note} • ${DateFormat('d MMM').format(t.date)}",
+                      noteDisplay,
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600)
                     ),
                     trailing: Text("₹${t.amount.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: col)),
@@ -1349,10 +1906,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
               itemBuilder: (ctx, i) {
                 final t = filteredList[i];
                 Color col;
-                if(t.contact == 'Self') col = Colors.orange;
-                else if(t.type.contains('old')) col = Colors.grey;
-                else if(['take', 'paid'].contains(t.type)) col = Colors.green;
-                else col = Colors.red;
+                IconData ico;
+                if(t.contact == 'Wallet') {
+                  col = Colors.blue;
+                  ico = t.type == 'add' ? Icons.account_balance_wallet : t.type == 'withdraw' ? Icons.money_off : Icons.edit;
+                }
+                else if(t.contact == 'Self') { col = Colors.orange; ico = Icons.fastfood_rounded; }
+                else if(t.type == 'paid') { col = Colors.purple; ico = Icons.done_all_rounded; }
+                else if(t.type == 'got') { col = Colors.teal; ico = Icons.done_all_rounded; }
+                else if(t.type.contains('old')) { col = Colors.grey; ico = Icons.history_rounded; }
+                else if(t.type == 'take') { col = Colors.green; ico = Icons.arrow_upward_rounded; }
+                else { col = Colors.red; ico = Icons.arrow_downward_rounded; }
+
+                String typeStr = t.type;
+                if (t.type == 'give') typeStr = 'Udhar Liya';
+                else if (t.type == 'take') typeStr = 'Udhar Diya';
+                else if (t.type == 'paid') typeStr = 'I Paid';
+                else if (t.type == 'got') typeStr = 'Got Paid';
+                else if (t.contact == 'Self') typeStr = '';
+
+                String noteDisplay = t.note.isEmpty ? typeStr : typeStr.isEmpty ? t.note : "${t.note} ($typeStr)";
+                if (noteDisplay.isEmpty) noteDisplay = DateFormat('d MMM').format(t.date);
+                else noteDisplay = "$noteDisplay • ${DateFormat('d MMM').format(t.date)}";
 
                 return Card(
                   margin: EdgeInsets.zero,
@@ -1362,11 +1937,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     leading: CircleAvatar(
                       backgroundColor: col.withOpacity(0.1),
                       radius: 16,
-                      child: Icon(t.contact == 'Self' ? Icons.fastfood : Icons.swap_horiz, color: col, size: 16),
+                      child: Icon(ico, color: col, size: 16),
                     ),
                     title: Text(t.contact, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     subtitle: Text(
-                      "${t.note.isEmpty ? t.type : t.note} • ${DateFormat('d MMM').format(t.date)}",
+                      noteDisplay,
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600)
                     ),
                     trailing: Text(
@@ -1434,6 +2009,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     double kharcha = 0, lena = 0, dena = 0;
     for (var t in list) {
       if (t.contact == 'Self') kharcha += t.amount;
+      else if (t.contact == 'Wallet') {} // ignore
       else {
         if (t.type == 'take') lena += t.amount;
         if (t.type == 'give') dena += t.amount;
@@ -1481,6 +2057,84 @@ class _AddTxnFormState extends State<AddTxnForm> {
   final _amtCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
 
+  Widget _buildQuickNoteChip(BuildContext context, AppProvider provider, String text) {
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _noteCtrl.text = text;
+        });
+      },
+      onLongPress: () {
+        showDialog(
+          context: context, 
+          builder: (ctx) => AlertDialog(
+            title: const Text("Delete Quick Note?"),
+            content: Text("Remove '$text'?"),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+              TextButton(
+                onPressed: () {
+                  provider.removeQuickNote(text);
+                  Navigator.pop(ctx);
+                }, 
+                child: const Text("Delete", style: TextStyle(color: Colors.red))
+              ),
+            ]
+          )
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.grey.withOpacity(0.3)),
+        ),
+        child: Text(text, style: const TextStyle(fontSize: 12)),
+      ),
+    );
+  }
+
+  Widget _buildAddQuickNoteChip(BuildContext context, AppProvider provider) {
+    return InkWell(
+      onTap: () {
+        final ctrl = TextEditingController();
+        showDialog(
+          context: context, 
+          builder: (ctx) => AlertDialog(
+            title: const Text("Add Quick Note"),
+            content: TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(labelText: "Note (e.g., 🍕 Pizza)", border: OutlineInputBorder()),
+              autofocus: true,
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+              FilledButton(
+                onPressed: () {
+                  if (ctrl.text.isNotEmpty) {
+                    provider.addQuickNote(ctrl.text.trim());
+                    Navigator.pop(ctx);
+                  }
+                }, 
+                child: const Text("Add")
+              ),
+            ]
+          )
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: provider.primaryColor.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: provider.primaryColor.withOpacity(0.5)),
+        ),
+        child: Icon(Icons.add, size: 16, color: provider.primaryColor),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<AppProvider>(context);
@@ -1518,8 +2172,8 @@ class _AddTxnFormState extends State<AddTxnForm> {
                 items: const [
                   DropdownMenuItem(value: 'give', child: Text("🔴 Udhar Liya (Dena)")),
                   DropdownMenuItem(value: 'take', child: Text("🟢 Udhar Diya (Lena)")),
-                  DropdownMenuItem(value: 'old_give', child: Text("⬜ Purana Baki (Dena)", style: TextStyle(color: Colors.grey))),
-                  DropdownMenuItem(value: 'old_take', child: Text("⬜ Purana Baki (Lena)", style: TextStyle(color: Colors.grey))),
+                  DropdownMenuItem(value: 'paid', child: Text("✅ Maine Udhar Chukadiya (I Paid)")),
+                  DropdownMenuItem(value: 'got', child: Text("✅ Usne Udhar Chukadiya (Got Paid)")),
                 ],
                 onChanged: (v) => setState(() => txnType = v!),
                 decoration: const InputDecoration(labelText: "Type", prefixIcon: Icon(Icons.swap_horiz, size: 20)),
@@ -1545,6 +2199,18 @@ class _AddTxnFormState extends State<AddTxnForm> {
               ],
             ),
             
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ...provider.quickNotes.map((note) => _buildQuickNoteChip(context, provider, note)),
+                  _buildAddQuickNoteChip(context, provider),
+                ],
+              ),
+            ),
+
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -1713,6 +2379,19 @@ class SettingsScreen extends StatelessWidget {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
                   },
                 ),
+ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.picture_as_pdf_rounded, color: Colors.redAccent, size: 22),
+                  title: const Text("Export as PDF", style: TextStyle(fontSize: 14)),
+                  subtitle: const Text("Generate Tiffin & Expense report", style: TextStyle(fontSize: 11)),
+                  onTap: () async {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Generating PDF... Please wait")));
+                    String msg = await provider.exportAsPDF();
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 4)));
+                  },
+                ),
+                const Divider(height: 1), 
+
                 ListTile(
                   dense: true,
                   leading: const Icon(Icons.download_rounded, color: Colors.green, size: 22),
@@ -1756,6 +2435,108 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 12),
         ],
       ),
+    );
+  }
+}
+
+class TransactionSearchDelegate extends SearchDelegate<String> {
+  final AppProvider provider;
+
+  TransactionSearchDelegate(this.provider);
+
+  @override
+  List<Widget> buildActions(BuildContext context) {
+    return [
+      if (query.isNotEmpty)
+        IconButton(
+          icon: const Icon(Icons.clear),
+          onPressed: () {
+            query = '';
+          },
+        )
+    ];
+  }
+
+  @override
+  Widget buildLeading(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.arrow_back),
+      onPressed: () {
+        close(context, '');
+      },
+    );
+  }
+
+  @override
+  Widget buildResults(BuildContext context) {
+    return _buildList();
+  }
+
+  @override
+  Widget buildSuggestions(BuildContext context) {
+    return _buildList();
+  }
+
+  Widget _buildList() {
+    final list = provider.transactions.where((t) {
+      return t.contact.toLowerCase().contains(query.toLowerCase()) || 
+             t.note.toLowerCase().contains(query.toLowerCase()) || 
+             t.amount.toString().contains(query);
+    }).toList();
+
+    if (list.isEmpty) {
+      return const Center(child: Text("No transactions found", style: TextStyle(color: Colors.grey)));
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: list.length,
+      separatorBuilder: (ctx, i) => const SizedBox(height: 6),
+      itemBuilder: (ctx, i) {
+        final t = list[i];
+        Color col;
+        IconData ico;
+        if(t.contact == 'Wallet') {
+          col = Colors.blue; 
+          ico = t.type == 'add' ? Icons.account_balance_wallet : t.type == 'withdraw' ? Icons.money_off : Icons.edit; 
+        }
+        else if(t.contact == 'Self') { col = Colors.orange; ico = Icons.fastfood_rounded; }
+        else if(t.type == 'paid') { col = Colors.purple; ico = Icons.done_all_rounded; }
+        else if(t.type == 'got') { col = Colors.teal; ico = Icons.done_all_rounded; }
+        else if(t.type.contains('old')) { col = Colors.grey; ico = Icons.history_rounded; }
+        else if(t.type == 'take') { col = Colors.green; ico = Icons.arrow_upward_rounded; }
+        else { col = Colors.red; ico = Icons.arrow_downward_rounded; }
+
+        String typeStr = t.type;
+        if (t.type == 'give') typeStr = 'Udhar Liya';
+        else if (t.type == 'take') typeStr = 'Udhar Diya';
+        else if (t.type == 'paid') typeStr = 'I Paid';
+        else if (t.type == 'got') typeStr = 'Got Paid';
+        else if (t.contact == 'Self') typeStr = '';
+
+        String noteDisplay = t.note.isEmpty ? typeStr : typeStr.isEmpty ? t.note : "${t.note} ($typeStr)";
+        if (noteDisplay.isEmpty) noteDisplay = DateFormat('d MMM').format(t.date);
+        else noteDisplay = "$noteDisplay • ${DateFormat('d MMM').format(t.date)}";
+
+        return Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+            leading: CircleAvatar(
+              backgroundColor: col.withOpacity(0.1),
+              radius: 16,
+              child: Icon(ico, color: col, size: 16),
+            ),
+            title: Text(t.contact, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            subtitle: Text(
+              noteDisplay,
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600)
+            ),
+            trailing: Text("₹${t.amount.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: col)),
+          ),
+        );
+      },
     );
   }
 }

@@ -442,6 +442,52 @@ class AppProvider with ChangeNotifier {
     saveData();
   }
 
+  void editTransactionNote(String id, String newNote, [double? newAmount]) {
+    int index = transactions.indexWhere((t) => t.id == id);
+    if (index != -1) {
+      final oldTxn = transactions[index];
+      
+      if (newAmount != null && newAmount != oldTxn.amount) {
+        // Revert old balance
+        if (oldTxn.contact == 'Self') {
+          totalBalance += oldTxn.amount; 
+        } else if (oldTxn.contact == 'Wallet') {
+          if (oldTxn.type == 'add') totalBalance -= oldTxn.amount;
+          if (oldTxn.type == 'withdraw') totalBalance += oldTxn.amount;
+        } else {
+          if (oldTxn.type == 'give') totalBalance -= oldTxn.amount;
+          if (oldTxn.type == 'take') totalBalance += oldTxn.amount;
+          if (oldTxn.type == 'paid') totalBalance += oldTxn.amount;
+          if (oldTxn.type == 'got') totalBalance -= oldTxn.amount;
+        }
+
+        // Apply new balance
+        if (oldTxn.contact == 'Self') {
+          totalBalance -= newAmount; 
+        } else if (oldTxn.contact == 'Wallet') {
+          if (oldTxn.type == 'add') totalBalance += newAmount;
+          if (oldTxn.type == 'withdraw') totalBalance -= newAmount;
+          if (oldTxn.type == 'edit') totalBalance = newAmount;
+        } else {
+          if (oldTxn.type == 'give') totalBalance += newAmount;
+          if (oldTxn.type == 'take') totalBalance -= newAmount;
+          if (oldTxn.type == 'paid') totalBalance -= newAmount;
+          if (oldTxn.type == 'got') totalBalance += newAmount;
+        }
+      }
+
+      transactions[index] = Transaction(
+        id: oldTxn.id,
+        contact: oldTxn.contact,
+        type: oldTxn.type,
+        amount: newAmount ?? oldTxn.amount,
+        note: newNote,
+        date: oldTxn.date,
+      );
+      saveData();
+    }
+  }
+
   void deleteTransaction(String id) {
     int index = transactions.indexWhere((t) => t.id == id);
     if (index != -1) {
@@ -1298,18 +1344,27 @@ class _TiffinScreenState extends State<TiffinScreen> {
             ),
             const SizedBox(height: 10),
 
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: ["S", "M", "T", "W", "T", "F", "S"].map((day) => 
+                Expanded(child: Center(child: Text(day, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12))))
+              ).toList(),
+            ),
+            const SizedBox(height: 4),
+
             _buildCalendar(provider, isHistory),
 
             const SizedBox(height: 12),
-            const Wrap(
-              spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
-              children: [
-
-                _Tag(col: Colors.green, txt: "Active"),
-                _Tag(col: Colors.orange, txt: "Half"),
-                _Tag(col: Colors.red, txt: "Off"),
-                _Tag(col: Colors.purple, txt: "End"),
-              ],
+            const Center(
+              child: Wrap(
+                spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
+                children: [
+                  _Tag(col: Colors.green, txt: "Active"),
+                  _Tag(col: Colors.orange, txt: "Half"),
+                  _Tag(col: Colors.red, txt: "Off"),
+                  _Tag(col: Colors.purple, txt: "End"),
+                ],
+              ),
             ),
 
             const SizedBox(height: 24),
@@ -1645,6 +1700,73 @@ class WalletCard extends StatelessWidget {
   }
 }
 
+void _showTxnOptionsDialog(BuildContext context, AppProvider provider, Transaction t) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      return AlertDialog(
+        title: const Text("Options"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit, color: Colors.blue),
+              title: const Text("Edit"),
+              onTap: () {
+                Navigator.pop(ctx);
+                final noteCtrl = TextEditingController(text: t.note);
+                final amtCtrl = TextEditingController(text: t.amount.toStringAsFixed(0));
+                showDialog(
+                  context: context,
+                  builder: (editCtx) => AlertDialog(
+                    title: const Text("Edit Transaction"),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          controller: amtCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: "Amount", prefixText: "₹ "),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: noteCtrl,
+                          decoration: const InputDecoration(labelText: "Note"),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(editCtx), child: const Text("Cancel")),
+                      FilledButton(
+                        onPressed: () {
+                          double? newAmt = double.tryParse(amtCtrl.text);
+                          if (newAmt != null) {
+                            provider.editTransactionNote(t.id, noteCtrl.text.trim(), newAmt);
+                            Navigator.pop(editCtx);
+                          }
+                        },
+                        child: const Text("Save"),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text("Delete", style: TextStyle(color: Colors.red)),
+              onTap: () {
+                provider.deleteTransaction(t.id);
+                Navigator.pop(ctx);
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 class HisabScreen extends StatelessWidget {
   const HisabScreen({super.key});
 
@@ -1701,19 +1823,6 @@ class HisabScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             
-            ListTile(
-              tileColor: Theme.of(context).cardColor,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              leading: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(color: Colors.grey.withOpacity(0.1), shape: BoxShape.circle),
-                child: const Icon(Icons.people_alt_rounded, color: Colors.grey, size: 20),
-              ),
-              title: const Text("Manage People", style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.grey),
-              onTap: () => _showPeopleSheet(context),
-            ),
             const SizedBox(height: 16),
             
             const AddTxnForm(),
@@ -1774,7 +1883,7 @@ class HisabScreen extends StatelessWidget {
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600)
                     ),
                     trailing: Text("₹${t.amount.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: col)),
-                    onLongPress: () => provider.deleteTransaction(t.id),
+                    onLongPress: () => _showTxnOptionsDialog(context, provider, t),
                   ),
                 );
               },
@@ -1948,6 +2057,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       "₹${t.amount.toStringAsFixed(0)}", 
                       style: TextStyle(color: col, fontWeight: FontWeight.bold, fontSize: 14)
                     ),
+                    onLongPress: () => _showTxnOptionsDialog(context, provider, t),
                   ),
                 );
               },
@@ -2061,7 +2171,12 @@ class _AddTxnFormState extends State<AddTxnForm> {
     return InkWell(
       onTap: () {
         setState(() {
-          _noteCtrl.text = text;
+          if (_noteCtrl.text.trim().isEmpty) {
+            _noteCtrl.text = text;
+          } else {
+            _noteCtrl.text = "${_noteCtrl.text.trim()}, $text";
+          }
+          _noteCtrl.selection = TextSelection.fromPosition(TextPosition(offset: _noteCtrl.text.length));
         });
       },
       onLongPress: () {
@@ -2151,16 +2266,30 @@ class _AddTxnFormState extends State<AddTxnForm> {
             const SizedBox(height: 12),
             
             // Name Dropdown
-            DropdownButtonFormField<String>(
-              value: contacts.contains(selectedContact) ? selectedContact : "Self",
-              isExpanded: true,
-              isDense: true,
-              items: contacts.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-              onChanged: (v) => setState(() {
-                selectedContact = v!;
-                txnType = v == 'Self' ? 'expense' : 'give';
-              }),
-              decoration: const InputDecoration(labelText: "Who?", prefixIcon: Icon(Icons.person_outline, size: 20)),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: contacts.contains(selectedContact) ? selectedContact : "Self",
+                    isExpanded: true,
+                    isDense: true,
+                    items: contacts.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
+                    onChanged: (v) => setState(() {
+                      selectedContact = v!;
+                      txnType = v == 'Self' ? 'expense' : 'give';
+                    }),
+                    decoration: const InputDecoration(labelText: "Who?", prefixIcon: Icon(Icons.person_outline, size: 20)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  padding: const EdgeInsets.all(14),
+                  icon: const Icon(Icons.people_alt_rounded),
+                  tooltip: "Manage People",
+                  onPressed: () => showModalBottomSheet(context: context, isScrollControlled: true, builder: (_) => const PeopleSheet()),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             
@@ -2170,10 +2299,10 @@ class _AddTxnFormState extends State<AddTxnForm> {
                 isExpanded: true,
                 isDense: true,
                 items: const [
-                  DropdownMenuItem(value: 'give', child: Text("🔴 Udhar Liya (Dena)")),
-                  DropdownMenuItem(value: 'take', child: Text("🟢 Udhar Diya (Lena)")),
-                  DropdownMenuItem(value: 'paid', child: Text("✅ Maine Udhar Chukadiya (I Paid)")),
-                  DropdownMenuItem(value: 'got', child: Text("✅ Usne Udhar Chukadiya (Got Paid)")),
+                  DropdownMenuItem(value: 'give', child: Text("🔴 Udhar Liya (Dena)", overflow: TextOverflow.ellipsis)),
+                  DropdownMenuItem(value: 'take', child: Text("🟢 Udhar Diya (Lena)", overflow: TextOverflow.ellipsis)),
+                  DropdownMenuItem(value: 'paid', child: Text("✅ Maine Udhar Chukadiya (I Paid)", overflow: TextOverflow.ellipsis)),
+                  DropdownMenuItem(value: 'got', child: Text("✅ Usne Udhar Chukadiya (Got Paid)", overflow: TextOverflow.ellipsis)),
                 ],
                 onChanged: (v) => setState(() => txnType = v!),
                 decoration: const InputDecoration(labelText: "Type", prefixIcon: Icon(Icons.swap_horiz, size: 20)),
@@ -2183,6 +2312,7 @@ class _AddTxnFormState extends State<AddTxnForm> {
             Row(
               children: [
                 Expanded(
+                  flex: 1,
                   child: TextField(
                     controller: _amtCtrl,
                     keyboardType: TextInputType.number,
@@ -2191,6 +2321,7 @@ class _AddTxnFormState extends State<AddTxnForm> {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
+                  flex: 2,
                   child: TextField(
                     controller: _noteCtrl,
                     decoration: const InputDecoration(labelText: "Note", prefixIcon: Icon(Icons.edit_note, size: 20)),
